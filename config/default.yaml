@@ -1,0 +1,48 @@
+# Causal-VITGN Configuration
+
+data:
+  dataset: "higgs_twitter"
+  data_dir: "./data/raw"
+  processed_dir: "./data/processed"
+  cascade_min_size: 5
+  cascade_max_size: 5000
+  observation_window: 0.5
+  train_ratio: 0.7
+  val_ratio: 0.1
+  temporal_neighbors: 20
+
+model:
+  num_nodes: 10000
+  memory_dim: 128
+  embedding_dim: 128
+  latent_dim: 64
+  time_encoding_dim: 32
+  num_heads: 8
+  dropout: 0.1
+
+causal:
+  dag_penalty: 1.0
+  sparsity_penalty: 0.01
+  consistency_penalty: 0.5
+  use_nonlinear: false
+
+training:
+  epochs: 60
+  batch_size: 32
+  learning_rate: 0.0001
+  grad_clip: 5.0
+  beta_anneal_epochs: 10
+  mc_samples_train: 5
+  mc_samples_test: 50
+  early_stop_patience: 5
+  warmup_epochs: 2
+
+counterfactual:
+  num_samples: 100
+  intervention_types: ["remove_user", "delay_post", "block_edge"]
+
+logging:
+  use_wandb: false
+  project_name: "causal-vitgn"
+  save_dir: "./checkpoints"
+  log_every: 50

@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite as below."
+authors:
+  - family-names: "Arafin"
+    given-names: "Umma Tania"
+    affiliation: "BRAC University"
+title: "Causal-VITGN: Counterfactual Cascade Reasoning on Evolving Social Networks"
+version: 0.1.0
+date-released: "2026-04-28"
+license: MIT

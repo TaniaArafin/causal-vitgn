@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# Data and large files
+data/raw/
+data/processed/
+data/*.gz
+data/*.txt
+data/*.tsv
+data/*.csv
+data/*.pkl
+
+# Model checkpoints
+checkpoints/*.pt
+checkpoints/*.pth
+checkpoints/*.ckpt
+
+# Logs and outputs
+wandb/
+runs/
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+Thumbs.db
