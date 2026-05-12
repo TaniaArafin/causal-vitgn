@@ -22,7 +22,7 @@ def cascade_nll(
    intensities: torch.Tensor,
    activated: torch.Tensor,
    interval: torch.Tensor,
-   eps: float = 1e-8,
+   eps: float = 1e-6,
 ) -> torch.Tensor:
    """Negative log-likelihood for cascade prediction with negative sampling.
 
@@ -44,14 +44,26 @@ def cascade_nll(
    This is well-defined for both positive (y=1) and negative (y=0) samples,
    unlike the raw Hawkes log-likelihood which assumes every example is an
    observed event.
+
+
+   Stability:
+     * intensities clamped to [eps, 1e4]
+     * intervals clamped to [0, 1e4]
+     * lam*dt clamped to [eps, 30] so exp(-lam*dt) stays in float range
+     * Any NaN/Inf in the per-sample log-lik is replaced with 0 and the
+       offending sample contributes a constant penalty, so a single bad
+       example cannot poison the whole batch.
    """
-   # Clamp intensity for numerical stability
-   intensities = intensities.clamp(min=eps, max=1e6)
-   lam_dt = (intensities * interval).clamp(min=eps, max=50.0)
+   # Hard clamps on inputs
+   intensities = intensities.clamp(min=eps, max=1e4)
+   interval = interval.clamp(min=0.0, max=1e4)
 
 
-   # log p(activated=1) = log(1 - exp(-lambda*dt))
-   # Use log1p(-exp(-x)) which is numerically stable
+   # lam * dt in a range where exp() is finite
+   lam_dt = (intensities * interval).clamp(min=eps, max=30.0)
+
+
+   # log p(activated=1) = log(1 - exp(-lambda*dt))   numerically stable
    log_p_pos = torch.log1p(-torch.exp(-lam_dt) + eps)
 
 
@@ -60,7 +72,13 @@ def cascade_nll(
 
 
    log_lik = activated * log_p_pos + (1.0 - activated) * log_p_neg
-   return -log_lik.sum()
+
+
+   # Replace any residual nan/inf with a finite penalty so training survives.
+   log_lik = torch.nan_to_num(log_lik, nan=-10.0, posinf=0.0, neginf=-10.0)
+
+
+   return -log_lik.mean()
 
 
 
@@ -78,8 +96,11 @@ def hawkes_log_likelihood(
 
 
 def kl_gaussian(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
-   """KL[ N(mu, sigma^2) || N(0, I) ] summed over batch and latent dim."""
-   return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+   """KL[ N(mu, sigma^2) || N(0, I) ] averaged over batch, summed over latent dim."""
+   # Clamp logvar to avoid exp() overflow when the encoder is untrained
+   logvar = logvar.clamp(min=-10.0, max=10.0)
+   per_sample = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=-1)
+   return per_sample.mean()
 
 
 

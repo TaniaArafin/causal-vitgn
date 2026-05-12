@@ -81,12 +81,23 @@ class Trainer:
        steps = 0
 
 
+       skipped = 0
        for batch in self.train_loader:
            batch = self._to_device(batch)
            self.optimizer.zero_grad()
            outputs = self.model(batch)
            losses = self.criterion(outputs, batch, self.model.causal_layer, beta)
-           losses["total"].backward()
+
+
+           # Skip any batch whose loss is non-finite (NaN/Inf) so a single
+           # bad batch cannot brick the whole training run.
+           total_loss = losses["total"]
+           if not torch.isfinite(total_loss):
+               skipped += 1
+               continue
+
+
+           total_loss.backward()
            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
            self.optimizer.step()
 
@@ -97,6 +108,8 @@ class Trainer:
            steps += 1
 
 
+       if skipped > 0:
+           print(f"  (skipped {skipped} non-finite batches this epoch)")
        return {k: v / max(steps, 1) for k, v in running.items()}
 
 

@@ -138,6 +138,11 @@ def build_training_tuples(
    tuples: List[Dict] = []
 
 
+   # Time normaliser: keep numbers in a sensible range (hours) so the
+   # Hawkes intensity * interval product cannot overflow.
+   TIME_SCALE = 3600.0  # raw seconds -> hours
+
+
    for cas in cascades:
        events = cas["events"]
        n = len(events)
@@ -150,6 +155,10 @@ def build_training_tuples(
            continue
 
 
+       # Normalise the cascade clock to t=0 at the first observed event,
+       # measured in hours. Keeps "current_time", "interval", and
+       # "time_since_last" in O(1)-O(10^2) range instead of O(10^9) seconds.
+       t0 = observed[0][1]
        cascade_users = {e[0] for e in events}
 
 
@@ -160,11 +169,15 @@ def build_training_tuples(
 
            recent = observed[-num_neighbors:]
            users = [e[0] for e in recent if 0 <= e[0] < num_users]
-           times = [e[1] for e in recent if 0 <= e[0] < num_users]
+           raw_times = [e[1] for e in recent if 0 <= e[0] < num_users]
 
 
            if not users:
                continue
+
+
+           # Convert to hours since cascade start
+           times = [max(0.0, (rt - t0) / TIME_SCALE) for rt in raw_times]
 
 
            while len(users) < num_neighbors:
@@ -174,14 +187,22 @@ def build_training_tuples(
            times = times[:num_neighbors]
 
 
+           t_target_norm = max(0.0, (t_target - t0) / TIME_SCALE)
+
+
+           # Clip interval to [0, 1e4] hours (~1 year) as a final safety net
+           interval = min(1e4, max(0.0, t_target_norm - times[0]))
+           tsl = min(1e4, max(0.0, t_target_norm - times[-1]))
+
+
            base = {
                "neighbors": [int(u) for u in users],
                "neighbor_times": [float(t) for t in times],
-               "current_time": float(t_target),
+               "current_time": float(t_target_norm),
                "activated_embs": np.zeros((num_neighbors, embed_dim), dtype=np.float32),
                "z_neighbors": np.zeros((num_neighbors, latent_dim), dtype=np.float32),
-               "time_since_last": float(t_target - times[-1]) if times[-1] > 0 else 0.0,
-               "interval": float(t_target - times[0]) if times[0] > 0 else 0.0,
+               "time_since_last": float(tsl),
+               "interval": float(interval),
            }
 
 
@@ -281,5 +302,6 @@ if __name__ == "__main__":
    p.add_argument("--obs_window", type=float, default=0.5)
    args = p.parse_args()
    main(args.raw_dir, args.out_dir, args.obs_window)
+
 
 
