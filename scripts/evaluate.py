@@ -88,7 +88,8 @@ def main(config_path: str, checkpoint: str):
 
    scores = np.concatenate(all_scores)
    labels = np.concatenate(all_labels).astype(int)
-   probs = np.clip(1.0 - np.exp(-scores), 0.0, 1.0)
+   # Decoder now returns raw logits; sigmoid -> probability.
+   probs = 1.0 / (1.0 + np.exp(-scores))
 
 
    metrics = all_metrics(scores, labels, probs)

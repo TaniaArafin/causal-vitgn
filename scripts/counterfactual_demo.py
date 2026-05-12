@@ -85,14 +85,16 @@ def main(config_path: str, checkpoint: str, num_cases: int = 3):
 
        with torch.no_grad():
            baseline = model(batch)
-       baseline_intensity = float(baseline["intensity"].sum())
+       # Decoder returns logits; convert to activation probabilities for
+       # an interpretable "cascade strength" number.
+       baseline_intensity = float(torch.sigmoid(baseline["intensity"]).sum())
 
 
        # Intervene on the first latent component (z_0 -> 0)
        idx = torch.tensor([0], device=device, dtype=torch.long)
        val = torch.zeros(1, device=device)
        cf_int, _ = model.counterfactual(batch, idx, val)
-       cf_intensity = float(cf_int.sum())
+       cf_intensity = float(torch.sigmoid(cf_int).sum())
 
 
        reduction = (baseline_intensity - cf_intensity) / max(baseline_intensity, 1e-6) * 100
@@ -113,3 +115,8 @@ if __name__ == "__main__":
    p.add_argument("--num_cases", type=int, default=3)
    args = p.parse_args()
    main(args.config, args.checkpoint, args.num_cases)
+
+
+
+
+

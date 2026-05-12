@@ -14,71 +14,34 @@ from typing import Dict
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 
 
 def cascade_nll(
-   intensities: torch.Tensor,
+   logits: torch.Tensor,
    activated: torch.Tensor,
-   interval: torch.Tensor,
+   interval: torch.Tensor = None,  # unused, kept for API compatibility
    eps: float = 1e-6,
 ) -> torch.Tensor:
-   """Negative log-likelihood for cascade prediction with negative sampling.
+   """Binary cross-entropy on raw logits for cascade activation.
 
 
-   Treats intensity as the rate of a Poisson event in an interval of length
-   `interval`. The probability of activation is:
+   The decoder returns an unbounded logit l. We model
+       P(activated=1) = sigmoid(l)
+   and minimise the standard BCE loss. This uses PyTorch's fused
+   BCEWithLogitsLoss which is numerically stable for any finite l and,
+   crucially, has full gradient signal everywhere — no clamps, no
+   saturation, nothing that can stall training the way the previous
+   Poisson-survival formulation did.
 
 
-       p_activated = 1 - exp(-lambda * interval)
-
-
-   so the BCE loss is:
-
-
-       -[ y * log(p) + (1-y) * log(1-p) ]
-     = -[ y * log(1 - exp(-lambda*interval)) - (1-y) * lambda * interval ]
-
-
-   This is well-defined for both positive (y=1) and negative (y=0) samples,
-   unlike the raw Hawkes log-likelihood which assumes every example is an
-   observed event.
-
-
-   Stability:
-     * intensities clamped to [eps, 1e4]
-     * intervals clamped to [0, 1e4]
-     * lam*dt clamped to [eps, 30] so exp(-lam*dt) stays in float range
-     * Any NaN/Inf in the per-sample log-lik is replaced with 0 and the
-       offending sample contributes a constant penalty, so a single bad
-       example cannot poison the whole batch.
+   interval is accepted for backwards compatibility but ignored; if you
+   want a Hawkes-style intensity for the paper, compute it post-hoc as
+   softplus(logit) / interval.
    """
-   # Hard clamps on inputs
-   intensities = intensities.clamp(min=eps, max=1e4)
-   interval = interval.clamp(min=0.0, max=1e4)
-
-
-   # lam * dt in a range where exp() is finite
-   lam_dt = (intensities * interval).clamp(min=eps, max=30.0)
-
-
-   # log p(activated=1) = log(1 - exp(-lambda*dt))   numerically stable
-   log_p_pos = torch.log1p(-torch.exp(-lam_dt) + eps)
-
-
-   # log p(activated=0) = -lambda * dt
-   log_p_neg = -lam_dt
-
-
-   log_lik = activated * log_p_pos + (1.0 - activated) * log_p_neg
-
-
-   # Replace any residual nan/inf with a finite penalty so training survives.
-   log_lik = torch.nan_to_num(log_lik, nan=-10.0, posinf=0.0, neginf=-10.0)
-
-
-   return -log_lik.mean()
+   return F.binary_cross_entropy_with_logits(logits, activated, reduction="mean")
 
 
 
