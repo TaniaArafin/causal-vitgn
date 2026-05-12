@@ -32,17 +32,21 @@ causal:
 
 training:
  epochs: 60
- batch_size: 32
- learning_rate: 0.0005
+ batch_size: 128
+ learning_rate: 0.001
  grad_clip: 5.0
  beta_anneal_epochs: 10
+ # Cap beta at a small fraction. Default ELBO uses beta=1.0, but with the
+ # KL term contributing ~10x more loss than NLL at init, beta=1 caused
+ # posterior collapse: q(z) -> p(z) (random noise) -> decoder unable to
+ # learn -> NLL stuck at log(2). With beta=0.01 the KL is present but
+ # cannot dominate the predictive signal.
+ beta_max: 0.01
  mc_samples_train: 5
  mc_samples_test: 50
  early_stop_patience: 10
  warmup_epochs: 10
- # Free-bits KL: each latent dim must carry at least this many nats of
- # information, preventing posterior collapse.
- free_bits: 0.05
+ free_bits: 0.0
 
 
 counterfactual:

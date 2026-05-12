@@ -46,6 +46,7 @@ class Trainer:
        self.optimizer = Adam(self.model.parameters(), lr=t["learning_rate"])
        self.epochs = t["epochs"]
        self.beta_anneal_epochs = t["beta_anneal_epochs"]
+       self.beta_max = t.get("beta_max", 1.0)
        self.warmup_epochs = t.get("warmup_epochs", 10)
        self.grad_clip = t["grad_clip"]
        self.save_dir = config["logging"]["save_dir"]
@@ -66,7 +67,7 @@ class Trainer:
 
 
    def beta_schedule(self, epoch: int) -> float:
-       return min(1.0, (epoch + 1) / max(self.beta_anneal_epochs, 1))
+       return self.beta_max * min(1.0, (epoch + 1) / max(self.beta_anneal_epochs, 1))
 
 
    def structural_schedule(self, epoch: int) -> float:
