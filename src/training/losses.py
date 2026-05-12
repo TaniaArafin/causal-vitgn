@@ -95,18 +95,34 @@ def hawkes_log_likelihood(
 
 
 
-def kl_gaussian(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
-   """KL[ N(mu, sigma^2) || N(0, I) ] averaged over batch, summed over latent dim."""
-   # Clamp logvar to avoid exp() overflow when the encoder is untrained
+def kl_gaussian(
+   mu: torch.Tensor,
+   logvar: torch.Tensor,
+   free_bits: float = 0.0,
+) -> torch.Tensor:
+   """KL[ N(mu, sigma^2) || N(0, I) ].
+
+
+   Computes per-dimension KL, applies a free-bits floor (every latent
+   dimension must carry at least `free_bits` nats), then averages over
+   the batch and sums over latent dim. Free-bits prevents posterior
+   collapse: when KL per dim is below the floor, no gradient flows through
+   that dim's prior, so the model is allowed to use information freely.
+   """
    logvar = logvar.clamp(min=-10.0, max=10.0)
-   per_sample = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=-1)
-   return per_sample.mean()
+   # Per-dim KL, shape (B, D)
+   kl_per_dim = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
+   # Free bits: clamp per-dim KL from below so the optimiser stops driving
+   # tiny KLs toward zero.
+   if free_bits > 0.0:
+       kl_per_dim = kl_per_dim.clamp(min=free_bits)
+   return kl_per_dim.sum(dim=-1).mean()
 
 
 
 
 class CausalVITGNLoss(nn.Module):
-   """Combined ELBO + DAG + sparsity loss."""
+   """Combined ELBO + DAG + sparsity loss with free-bits KL and warmup."""
 
 
    def __init__(
@@ -114,11 +130,13 @@ class CausalVITGNLoss(nn.Module):
        dag_penalty: float = 1.0,
        sparsity_penalty: float = 0.01,
        consistency_penalty: float = 0.5,
+       free_bits: float = 0.0,
    ):
        super().__init__()
        self.dag_penalty = dag_penalty
        self.sparsity_penalty = sparsity_penalty
        self.consistency_penalty = consistency_penalty
+       self.free_bits = free_bits
 
 
    def forward(
@@ -127,10 +145,12 @@ class CausalVITGNLoss(nn.Module):
        batch: Dict[str, torch.Tensor],
        causal_layer,
        beta: float = 1.0,
+       structural_weight: float = 1.0,
    ) -> Dict[str, torch.Tensor]:
-       # 1) Cascade NLL — Poisson-survival BCE that handles both positive
-       # and negative samples (unlike raw Hawkes which assumes every example
-       # is an observed event).
+       """structural_weight (0..1) ramps the DAG + sparsity penalties.
+       Letting NLL settle before structural constraints kick in is what
+       prevents the optimiser from collapsing A to zero on epoch 0.
+       """
        nll = cascade_nll(
            outputs["intensity"],
            batch["activated"],
@@ -138,24 +158,19 @@ class CausalVITGNLoss(nn.Module):
        )
 
 
-       # 2) KL divergence
-       kl = kl_gaussian(outputs["mu"], outputs["logvar"])
+       kl = kl_gaussian(outputs["mu"], outputs["logvar"], free_bits=self.free_bits)
 
 
-       # 3) DAG acyclicity penalty (squared so it stays smooth)
        h_A = causal_layer.get_dag_constraint()
        dag_loss = h_A * h_A
-
-
-       # 4) Sparsity penalty
        sparsity_loss = causal_layer.get_sparsity_penalty()
 
 
        total = (
            nll
            + beta * kl
-           + self.dag_penalty * dag_loss
-           + self.sparsity_penalty * sparsity_loss
+           + structural_weight * self.dag_penalty * dag_loss
+           + structural_weight * self.sparsity_penalty * sparsity_loss
        )
 
 
@@ -167,6 +182,8 @@ class CausalVITGNLoss(nn.Module):
            "sparsity": sparsity_loss.detach(),
            "h_A": h_A.detach(),
        }
+
+
 
 
 

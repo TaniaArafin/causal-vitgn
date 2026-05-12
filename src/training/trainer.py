@@ -34,17 +34,19 @@ class Trainer:
 
 
        c = config["causal"]
+       t = config["training"]
        self.criterion = CausalVITGNLoss(
            dag_penalty=c["dag_penalty"],
            sparsity_penalty=c["sparsity_penalty"],
            consistency_penalty=c["consistency_penalty"],
+           free_bits=t.get("free_bits", 0.0),
        )
 
 
-       t = config["training"]
        self.optimizer = Adam(self.model.parameters(), lr=t["learning_rate"])
        self.epochs = t["epochs"]
        self.beta_anneal_epochs = t["beta_anneal_epochs"]
+       self.warmup_epochs = t.get("warmup_epochs", 10)
        self.grad_clip = t["grad_clip"]
        self.save_dir = config["logging"]["save_dir"]
        self.patience = t["early_stop_patience"]
@@ -67,6 +69,17 @@ class Trainer:
        return min(1.0, (epoch + 1) / max(self.beta_anneal_epochs, 1))
 
 
+   def structural_schedule(self, epoch: int) -> float:
+       """Ramp DAG + sparsity penalties from 0 to 1 over warmup_epochs.
+
+
+       During warmup the model is free to fit NLL without being pulled
+       toward A=0; only after the encoder/decoder have learned do the
+       structural constraints kick in.
+       """
+       return min(1.0, epoch / max(self.warmup_epochs, 1))
+
+
    def _to_device(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
        return {
            k: v.to(self.device) if torch.is_tensor(v) else v
@@ -77,6 +90,7 @@ class Trainer:
    def train_epoch(self, epoch: int) -> Dict[str, float]:
        self.model.train()
        beta = self.beta_schedule(epoch)
+       structural_weight = self.structural_schedule(epoch)
        running = {"total": 0.0, "nll": 0.0, "kl": 0.0, "dag": 0.0, "sparsity": 0.0}
        steps = 0
 
@@ -86,7 +100,13 @@ class Trainer:
            batch = self._to_device(batch)
            self.optimizer.zero_grad()
            outputs = self.model(batch)
-           losses = self.criterion(outputs, batch, self.model.causal_layer, beta)
+           losses = self.criterion(
+               outputs,
+               batch,
+               self.model.causal_layer,
+               beta=beta,
+               structural_weight=structural_weight,
+           )
 
 
            # Skip any batch whose loss is non-finite (NaN/Inf) so a single
@@ -114,8 +134,7 @@ class Trainer:
 
 
    @torch.no_grad()
-   def validate(self) -> float:
-      
+   def validate(self, structural_weight: float = 1.0) -> float:
        self.model.eval()
        total = 0.0
        steps = 0
@@ -123,7 +142,11 @@ class Trainer:
            batch = self._to_device(batch)
            outputs = self.model(batch)
            losses = self.criterion(
-               outputs, batch, self.model.causal_layer, beta=1.0
+               outputs,
+               batch,
+               self.model.causal_layer,
+               beta=1.0,
+               structural_weight=structural_weight,
            )
            total += float(losses["total"])
            steps += 1
@@ -149,7 +172,8 @@ class Trainer:
        for epoch in range(self.epochs):
            start = time.time()
            train_metrics = self.train_epoch(epoch)
-           val_loss = self.validate()
+           sw = self.structural_schedule(epoch)
+           val_loss = self.validate(structural_weight=sw)
            elapsed = time.time() - start
 
 
@@ -160,6 +184,7 @@ class Trainer:
                f"nll={train_metrics['nll']:.3f} | "
                f"kl={train_metrics['kl']:.3f} | "
                f"dag={train_metrics['dag']:.6f} | "
+               f"sw={sw:.2f} | "
                f"time={elapsed:.1f}s"
            )
 
