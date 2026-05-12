@@ -120,18 +120,24 @@ def build_training_tuples(
    num_neighbors: int = 20,
    embed_dim: int = 128,
    latent_dim: int = 64,
+   neg_ratio: int = 1,
+   rng_seed: int = 42,
 ) -> List[Dict]:
    """Convert cascades to model-ready tuples used by CascadeDataset.
 
 
-   Each tuple represents a (target_user, current_time) prediction problem,
-   drawn from the future portion of a cascade given the observed prefix.
+   Each cascade contributes (target_user, current_time) examples drawn from
+   its future portion. For every positive example we also emit `neg_ratio`
+   negative examples — random users who did NOT retweet in this cascade —
+   so the classifier has both classes to learn from.
 
 
-   All user ids are GUARANTEED to be in [0, num_users) so the model's
-   nn.Embedding can index them safely.
+   All user ids are GUARANTEED to be in [0, num_users).
    """
+   rng = np.random.default_rng(rng_seed)
    tuples: List[Dict] = []
+
+
    for cas in cascades:
        events = cas["events"]
        n = len(events)
@@ -144,13 +150,14 @@ def build_training_tuples(
            continue
 
 
+       cascade_users = {e[0] for e in events}
+
+
        for target_user, t_target in future:
-           # Skip any pathological out-of-range ids defensively.
            if not (0 <= target_user < num_users):
                continue
 
 
-           # Take last `num_neighbors` observed events as temporal neighbors
            recent = observed[-num_neighbors:]
            users = [e[0] for e in recent if 0 <= e[0] < num_users]
            times = [e[1] for e in recent if 0 <= e[0] < num_users]
@@ -160,27 +167,45 @@ def build_training_tuples(
                continue
 
 
-           # Pad to fixed length with PAD id 0
            while len(users) < num_neighbors:
                users.append(0)
                times.append(0.0)
-
-
            users = users[:num_neighbors]
            times = times[:num_neighbors]
 
 
-           tuples.append({
-               "target_node": int(target_user),
+           base = {
                "neighbors": [int(u) for u in users],
                "neighbor_times": [float(t) for t in times],
                "current_time": float(t_target),
                "activated_embs": np.zeros((num_neighbors, embed_dim), dtype=np.float32),
                "z_neighbors": np.zeros((num_neighbors, latent_dim), dtype=np.float32),
                "time_since_last": float(t_target - times[-1]) if times[-1] > 0 else 0.0,
-               "activated": 1.0,
                "interval": float(t_target - times[0]) if times[0] > 0 else 0.0,
+           }
+
+
+           tuples.append({
+               **base,
+               "target_node": int(target_user),
+               "activated": 1.0,
            })
+
+
+           for _ in range(neg_ratio):
+               for _ in range(10):
+                   neg = int(rng.integers(1, num_users))
+                   if neg not in cascade_users:
+                       break
+               else:
+                   continue
+               tuples.append({
+                   **base,
+                   "target_node": neg,
+                   "activated": 0.0,
+               })
+
+
    return tuples
 
 
@@ -256,3 +281,5 @@ if __name__ == "__main__":
    p.add_argument("--obs_window", type=float, default=0.5)
    args = p.parse_args()
    main(args.raw_dir, args.out_dir, args.obs_window)
+
+

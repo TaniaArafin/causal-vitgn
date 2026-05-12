@@ -48,21 +48,33 @@ def check(proc_dir: str = "./data/processed"):
 
        max_target = 0
        max_neighbor = 0
+       pos = 0
+       neg = 0
        for t in tuples:
            max_target = max(max_target, int(t["target_node"]))
            for nb in t["neighbors"]:
                max_neighbor = max(max_neighbor, int(nb))
+           if float(t["activated"]) >= 0.5:
+               pos += 1
+           else:
+               neg += 1
 
 
        max_id = max(max_target, max_neighbor)
        in_range = max_id < num_users
-       status = "✓" if in_range else "❌"
+       has_both_classes = pos > 0 and neg > 0
+       ok = in_range and has_both_classes
+       status = "✓" if ok else "❌"
        print(
            f"{status} {split:5s}: {len(tuples):,} tuples | "
-           f"max_target={max_target:,} | max_neighbor={max_neighbor:,} | "
+           f"pos={pos:,} | neg={neg:,} | "
            f"max_id={max_id:,} (limit={num_users:,})"
        )
        if not in_range:
+           print(f"   ↳ ids exceed num_users")
+       if not has_both_classes:
+           print(f"   ↳ degenerate label set (need both pos and neg)")
+       if not ok:
            all_ok = False
 
 
@@ -78,8 +90,3 @@ def check(proc_dir: str = "./data/processed"):
 
 if __name__ == "__main__":
    check()
-
-
-
-
-
