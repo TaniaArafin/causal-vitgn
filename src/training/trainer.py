@@ -135,9 +135,14 @@ class Trainer:
 
 
    @torch.no_grad()
-   def validate(self, structural_weight: float = 1.0) -> float:
+   def validate(
+       self,
+       beta: float = 1.0,
+       structural_weight: float = 1.0,
+   ) -> Dict[str, float]:
+       """Return mean NLL (early-stop signal) plus the full loss breakdown."""
        self.model.eval()
-       total = 0.0
+       running = {"total": 0.0, "nll": 0.0, "kl": 0.0}
        steps = 0
        for batch in self.val_loader:
            batch = self._to_device(batch)
@@ -146,12 +151,14 @@ class Trainer:
                outputs,
                batch,
                self.model.causal_layer,
-               beta=1.0,
+               beta=beta,
                structural_weight=structural_weight,
            )
-           total += float(losses["total"])
+           for k in running:
+               v = losses[k]
+               running[k] += v.detach().item() if torch.is_tensor(v) else float(v)
            steps += 1
-       return total / max(steps, 1)
+       return {k: v / max(steps, 1) for k, v in running.items()}
 
 
    def save_checkpoint(self, epoch: int, val_loss: float, name: str = "best_model.pt"):
@@ -173,28 +180,37 @@ class Trainer:
        for epoch in range(self.epochs):
            start = time.time()
            train_metrics = self.train_epoch(epoch)
+           beta = self.beta_schedule(epoch)
            sw = self.structural_schedule(epoch)
-           val_loss = self.validate(structural_weight=sw)
+           val_metrics = self.validate(beta=beta, structural_weight=sw)
            elapsed = time.time() - start
+
+
+           # Use val NLL (predictive performance) as the early-stop signal.
+           # val_total includes beta*KL, which we want to *grow* (the encoder
+           # carrying more information about z), so using total would
+           # penalise the model for becoming useful.
+           val_signal = val_metrics["nll"]
 
 
            print(
                f"Epoch {epoch:03d} | "
-               f"train_total={train_metrics['total']:.3f} | "
-               f"val_total={val_loss:.3f} | "
-               f"nll={train_metrics['nll']:.3f} | "
-               f"kl={train_metrics['kl']:.3f} | "
+               f"train_nll={train_metrics['nll']:.3f} | "
+               f"val_nll={val_signal:.3f} | "
+               f"train_kl={train_metrics['kl']:.3f} | "
+               f"val_kl={val_metrics['kl']:.3f} | "
                f"dag={train_metrics['dag']:.6f} | "
+               f"beta={beta:.4f} | "
                f"sw={sw:.2f} | "
                f"time={elapsed:.1f}s"
            )
 
 
-           if val_loss < self.best_val_loss:
-               self.best_val_loss = val_loss
+           if val_signal < self.best_val_loss:
+               self.best_val_loss = val_signal
                self.bad_epochs = 0
-               self.save_checkpoint(epoch, val_loss)
-               print(f"  -> saved checkpoint (val={val_loss:.3f})")
+               self.save_checkpoint(epoch, val_signal)
+               print(f"  -> saved checkpoint (val_nll={val_signal:.3f})")
            else:
                self.bad_epochs += 1
                if self.bad_epochs >= self.patience:
