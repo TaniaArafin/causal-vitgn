@@ -44,25 +44,45 @@ class TimeEncoder(nn.Module):
 
 
 class MemoryModule(nn.Module):
-   """Per-node memory state s_i(t) updated via GRU on each event."""
+   """Per-node memory.
+
+
+   The original TGN paper updates this state via a GRU on every streamed
+   event. That requires processing events in chronological order outside
+   the optimiser, which is incompatible with mini-batch SGD over shuffled
+   cascades. We replace it with a standard learnable embedding: each node
+   gets a memory_dim vector trained by backprop through the usual loss.
+   Functionally this is a "memory" in the sense that it's a per-node
+   persistent state — just one learned via gradient descent rather than
+   streamed messages.
+
+
+   Keeps the GRU + last_update buffer so the original online-update API
+   (`update`) still works for any caller that wants the original TGN
+   behaviour (e.g. inference-time streaming).
+   """
 
 
    def __init__(self, num_nodes: int, memory_dim: int, message_dim: int):
        super().__init__()
        self.num_nodes = num_nodes
        self.memory_dim = memory_dim
+       self.embedding = nn.Embedding(num_nodes, memory_dim)
+       nn.init.normal_(self.embedding.weight, mean=0.0, std=0.1)
+
+
+       # Kept so the streaming API still works; not used during training.
        self.gru = nn.GRUCell(message_dim, memory_dim)
-       self.register_buffer("memory", torch.zeros(num_nodes, memory_dim))
        self.register_buffer("last_update", torch.zeros(num_nodes))
 
 
    def reset(self):
-       self.memory.zero_()
+       # Reset only the streaming-state buffer; learned embedding is kept.
        self.last_update.zero_()
 
 
    def get_memory(self, node_ids: torch.Tensor) -> torch.Tensor:
-       return self.memory[node_ids]
+       return self.embedding(node_ids)
 
 
    def update(
@@ -71,11 +91,13 @@ class MemoryModule(nn.Module):
        messages: torch.Tensor,
        t: torch.Tensor,
    ):
-       old = self.memory[node_ids]
-       new = self.gru(messages, old)
-       # Detach memory updates so they don't backprop through previous events
-       self.memory[node_ids] = new.detach()
-       self.last_update[node_ids] = t.detach()
+       """Optional online update (not used during training). Kept for
+       compatibility with streaming-event use cases."""
+       with torch.no_grad():
+           old = self.embedding.weight[node_ids]
+           new = self.gru(messages, old)
+           self.embedding.weight[node_ids] = new
+           self.last_update[node_ids] = t.detach()
 
 
 

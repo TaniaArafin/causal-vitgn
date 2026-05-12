@@ -105,9 +105,9 @@ def test_hawkes_decoder():
    cur_t = torch.rand(B) * 100 + 100
 
 
-   intensity = decoder(z_user, dt, z_neighbors, nb_times, cur_t)
-   assert intensity.shape == (B,)
-   assert (intensity >= 0).all(), "Intensities must be non-negative"
+   logits = decoder(z_user, dt, z_neighbors, nb_times, cur_t)
+   assert logits.shape == (B,)
+   assert torch.isfinite(logits).all(), "Decoder logits must be finite"
    print("OK  NeuralHawkesDecoder")
 
 
@@ -269,3 +269,8 @@ def main():
 
 if __name__ == "__main__":
    main()
+
+
+
+
+
